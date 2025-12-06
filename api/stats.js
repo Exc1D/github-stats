@@ -103,13 +103,15 @@ function calculateLanguageStats(repositories) {
 function calculateStreaks(weeks) {
   const allDays = weeks.flatMap((week) => week.contributionDays);
 
-  // Get today's date in UTC
-  const now = new Date();
-  const today = new Date(
-    Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
-  )
-    .toISOString()
-    .split("T")[0];
+  if (allDays.length === 0) {
+    return {
+      current: 0,
+      currentStart: null,
+      longest: 0,
+      longestStart: null,
+      longestEnd: null,
+    };
+  }
 
   let currentStreak = 0;
   let currentStreakStart = null;
@@ -120,6 +122,10 @@ function calculateStreaks(weeks) {
   let tempStreak = 0;
   let tempStreakStart = null;
   let tempStreakEnd = null;
+
+  // Check if the most recent day (last day) has contributions
+  const lastDay = allDays[allDays.length - 1];
+  const hasContributionToday = lastDay.contributionCount > 0;
 
   // Iterate backwards from the most recent day
   for (let i = allDays.length - 1; i >= 0; i--) {
@@ -138,12 +144,21 @@ function calculateStreaks(weeks) {
         longestStreakStart = tempStreakStart;
         longestStreakEnd = tempStreakEnd;
       }
-    } else {
-      // Streak broken
-      // Only set current streak if we haven't found it yet and the last contribution was recent
-      if (currentStreak === 0 && tempStreak > 0 && i === allDays.length - 1) {
+
+      // Set current streak if we're still counting from the most recent day
+      if (hasContributionToday && currentStreak === 0) {
         currentStreak = tempStreak;
         currentStreakStart = tempStreakStart;
+      }
+    } else {
+      // Streak broken - stop counting current streak
+      if (
+        hasContributionToday &&
+        currentStreak === 0 &&
+        i < allDays.length - 1
+      ) {
+        // We've hit the first gap after the current streak
+        break;
       }
 
       tempStreak = 0;
@@ -152,12 +167,13 @@ function calculateStreaks(weeks) {
     }
   }
 
-  // If we finish the loop and still have a streak, it means the streak goes all the way back
-  // Check if current streak should be set (if the most recent day has contributions)
-  if (allDays.length > 0 && allDays[allDays.length - 1].contributionCount > 0) {
+  // If we made it through the entire loop and had contributions on the last day
+  if (hasContributionToday && currentStreak === 0 && tempStreak > 0) {
     currentStreak = tempStreak;
     currentStreakStart = tempStreakStart;
   }
+
+  const today = new Date().toISOString().split("T")[0];
 
   return {
     current: currentStreak,

@@ -49,6 +49,9 @@ https://your-project.vercel.app/api/stats?username=YOUR_USERNAME
 ![GitHub Stats](https://your-project.vercel.app/api/stats?username=YOUR_USERNAME)
 ```
 
+**CHANGE `your-project` to specific vercel project name**
+**CHHANGE `YOUR_USERNAME` to your username**
+
 ## Troubleshooting
 
 If you get a 404 error:
