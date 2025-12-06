@@ -1,0 +1,8 @@
+{
+  "name": "github-stats-generator",
+  "version": "1.0.0",
+  "description": "GitHub stats generator with auto-updating stats and activity graph",
+  "dependencies": {
+    "node-fetch": "^2.6.7"
+  }
+}
