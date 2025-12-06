@@ -258,29 +258,34 @@ function generateSVG(
   const longestEndDate = formatDate(streaks.longestEnd);
   const currentStartDate = formatDate(streaks.currentStart);
 
-  // Generate language bar segments
+  // Generate language bar segments with proper spacing
   let currentX = 0;
   const barWidth = 720;
+  const barY = 420;
+  const barHeight = 28;
   const languageBarSegments = languages
-    .map((lang) => {
+    .map((lang, index) => {
       const segmentWidth = (parseFloat(lang.percentage) / 100) * barWidth;
+      const isFirst = index === 0;
+      const isLast = index === languages.length - 1;
+      const rx = isFirst || isLast ? 4 : 0;
       const segment = `<rect x="${
         currentX + 40
-      }" y="495" width="${segmentWidth}" height="24" fill="${
+      }" y="${barY}" width="${segmentWidth}" height="${barHeight}" fill="${
         lang.color
-      }" rx="3"/>`;
+      }" rx="${rx}"/>`;
       currentX += segmentWidth;
       return segment;
     })
     .join("");
 
-  // Generate language list in two columns
+  // Generate language list in two columns with better spacing
   const languageList = languages
     .map((lang, index) => {
       const row = Math.floor(index / 2);
       const col = index % 2;
       const x = col === 0 ? 100 : 450;
-      const y = 555 + row * 35;
+      const y = 485 + row * 38;
 
       return `
         <circle cx="${x - 40}" cy="${y - 3}" r="6" fill="${lang.color}"/>
@@ -312,15 +317,15 @@ function generateSVG(
     .stat-number { font-size: 48px; font-weight: bold; }
     .stat-label { font-size: 16px; }
     .stat-detail { font-size: 12px; opacity: 0.8; }
-    .lang-text { font-size: 15px; font-weight: 500; }
-    .lang-percentage { font-size: 15px; opacity: 0.8; }
-    .section-title { font-size: 18px; font-weight: 600; }
+    .lang-text { font-size: 16px; font-weight: 500; }
+    .lang-percentage { font-size: 16px; opacity: 0.7; font-weight: 600; }
+    .section-title { font-size: 20px; font-weight: 600; letter-spacing: -0.5px; }
     .accent { fill: #f85149; }
     .blue { fill: #58a6ff; }
-    .graph-line { stroke: #3fb950; stroke-width: 2.5; fill: none; }
+    .graph-line { stroke: #3fb950; stroke-width: 3; fill: none; stroke-linecap: round; stroke-linejoin: round; }
     .graph-area { fill: #3fb95020; }
-    .grid-line { stroke-width: 1; opacity: 0.3; }
-    .axis-label { font-size: 11px; }
+    .grid-line { stroke-width: 1; opacity: 0.25; }
+    .axis-label { font-size: 12px; opacity: 0.7; }
   </style>
   
   <!-- Background -->

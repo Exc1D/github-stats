@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "GitHub stats generator with auto-updating stats and activity graph",
   "dependencies": {
-    "node-fetch": "^2.6.7"
+    "express": "^5.2.1",
+    "node-fetch": "^2.7.0"
   }
 }
