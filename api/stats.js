@@ -30,6 +30,8 @@ async function fetchGitHubData(username) {
         }
         repositories(first: 100, ownerAffiliations: OWNER, orderBy: {field: UPDATED_AT, direction: DESC}) {
           nodes {
+            stargazerCount
+            forkCount
             languages(first: 10, orderBy: {field: SIZE, direction: DESC}) {
               edges {
                 size
@@ -113,74 +115,69 @@ function calculateStreaks(weeks) {
     };
   }
 
-  let currentStreak = 0;
-  let currentStreakStart = null;
+  // Get today's date in UTC (same as GitHub's contribution graph)
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const todayStr = today.toISOString().split("T")[0];
+
   let longestStreak = 0;
   let longestStreakStart = null;
   let longestStreakEnd = null;
 
+  let currentStreak = 0;
+  let currentStreakStart = null;
+
   let tempStreak = 0;
   let tempStreakStart = null;
-  let tempStreakEnd = null;
 
-  // Check if the most recent day (last day) has contributions
-  const lastDay = allDays[allDays.length - 1];
-  const hasContributionToday = lastDay.contributionCount > 0;
-
-  // Iterate backwards from the most recent day
-  for (let i = allDays.length - 1; i >= 0; i--) {
+  // Iterate through all days from oldest to newest
+  for (let i = 0; i < allDays.length; i++) {
     const day = allDays[i];
+    const dayDate = new Date(day.date + "T00:00:00Z");
 
     if (day.contributionCount > 0) {
       if (tempStreak === 0) {
-        tempStreakEnd = day.date;
+        tempStreakStart = day.date;
       }
       tempStreak++;
-      tempStreakStart = day.date;
 
-      // Track longest streak
+      // Update longest streak if current temp streak is longer
       if (tempStreak > longestStreak) {
         longestStreak = tempStreak;
         longestStreakStart = tempStreakStart;
-        longestStreakEnd = tempStreakEnd;
-      }
-
-      // Set current streak if we're still counting from the most recent day
-      if (hasContributionToday && currentStreak === 0) {
-        currentStreak = tempStreak;
-        currentStreakStart = tempStreakStart;
+        longestStreakEnd = day.date;
       }
     } else {
-      // Streak broken - stop counting current streak
-      if (
-        hasContributionToday &&
-        currentStreak === 0 &&
-        i < allDays.length - 1
-      ) {
-        // We've hit the first gap after the current streak
-        break;
-      }
-
+      // Reset temp streak when we hit a day with no contributions
       tempStreak = 0;
       tempStreakStart = null;
-      tempStreakEnd = null;
     }
   }
 
-  // If we made it through the entire loop and had contributions on the last day
-  if (hasContributionToday && currentStreak === 0 && tempStreak > 0) {
-    currentStreak = tempStreak;
-    currentStreakStart = tempStreakStart;
-  }
+  // Calculate current streak by iterating backwards from today
+  for (let i = allDays.length - 1; i >= 0; i--) {
+    const day = allDays[i];
+    const dayDate = new Date(day.date + "T00:00:00Z");
 
-  const today = new Date().toISOString().split("T")[0];
+    // Stop if we've gone past today (shouldn't happen, but safety check)
+    if (dayDate > today) continue;
+
+    if (day.contributionCount > 0) {
+      currentStreak++;
+      currentStreakStart = day.date;
+    } else if (day.date !== todayStr) {
+      // If we hit a day with no contributions and it's not today
+      // (preserve streak if user hasn't contributed yet today)
+      break;
+    }
+  }
 
   return {
     current: currentStreak,
-    currentStart: currentStreakStart || today,
+    currentStart: currentStreakStart || todayStr,
     longest: longestStreak,
-    longestStart: longestStreakStart || allDays[0]?.date || today,
-    longestEnd: longestStreakEnd || today,
+    longestStart: longestStreakStart || allDays[0]?.date || todayStr,
+    longestEnd: longestStreakEnd || todayStr,
   };
 }
 
@@ -195,6 +192,7 @@ function formatDate(dateStr) {
     month: "short",
     day: "numeric",
     year: "numeric",
+    timeZone: "UTC",
   });
 }
 
@@ -207,17 +205,30 @@ function getAccountCreationDate(createdAt) {
   });
 }
 
+function calculateRepoStats(repositories) {
+  const totalStars = repositories.reduce(
+    (sum, repo) => sum + repo.stargazerCount,
+    0
+  );
+  const totalForks = repositories.reduce(
+    (sum, repo) => sum + repo.forkCount,
+    0
+  );
+  return { totalStars, totalForks };
+}
+
 function generateSVG(
   totalContributions,
   streaks,
   activityDays,
   languages,
-  createdAt
+  createdAt,
+  repoStats
 ) {
   const width = 800;
-  const height = 680;
+  const height = 760;
   const graphWidth = 720;
-  const graphHeight = 120;
+  const graphHeight = 140;
   const padding = 30;
 
   const maxContributions = Math.max(
@@ -225,7 +236,7 @@ function generateSVG(
     1
   );
 
-  // Generate line path for activity graph
+  // Generate smooth curve path for activity graph using quadratic bezier curves
   const points = activityDays.map((day, index) => {
     const x =
       padding +
@@ -234,22 +245,37 @@ function generateSVG(
       graphHeight -
       padding -
       (day.contributionCount / maxContributions) * (graphHeight - 2 * padding);
-    return `${x},${y}`;
+    return { x, y, count: day.contributionCount };
   });
 
-  const linePath = `M ${points.join(" L ")}`;
+  // Create smooth curve using quadratic bezier
+  let linePath = `M ${points[0].x},${points[0].y}`;
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const curr = points[i];
+    const midX = (prev.x + curr.x) / 2;
+    linePath += ` Q ${prev.x},${prev.y} ${midX},${(prev.y + curr.y) / 2}`;
+    if (i === points.length - 1) {
+      linePath += ` Q ${curr.x},${curr.y} ${curr.x},${curr.y}`;
+    }
+  }
+
   const areaPath = `${linePath} L ${graphWidth - padding},${
     graphHeight - padding
   } L ${padding},${graphHeight - padding} Z`;
 
-  // Generate grid lines for activity graph
+  // Generate grid lines
   const gridLines = [];
   for (let i = 0; i <= 4; i++) {
     const y = padding + (i * (graphHeight - 2 * padding)) / 4;
+    const value = Math.round(maxContributions * (1 - i / 4));
     gridLines.push(
       `<line x1="${padding}" y1="${y}" x2="${
         graphWidth - padding
-      }" y2="${y}" class="grid-line"/>`
+      }" y2="${y}" class="grid-line"/>
+      <text x="${padding - 15}" y="${
+        y + 4
+      }" class="axis-label" text-anchor="end">${value}</text>`
     );
   }
 
@@ -258,17 +284,17 @@ function generateSVG(
   const longestEndDate = formatDate(streaks.longestEnd);
   const currentStartDate = formatDate(streaks.currentStart);
 
-  // Generate language bar segments with proper spacing
+  // Generate language bar
   let currentX = 0;
   const barWidth = 720;
-  const barY = 420;
-  const barHeight = 28;
+  const barY = 500;
+  const barHeight = 32;
   const languageBarSegments = languages
     .map((lang, index) => {
       const segmentWidth = (parseFloat(lang.percentage) / 100) * barWidth;
       const isFirst = index === 0;
       const isLast = index === languages.length - 1;
-      const rx = isFirst || isLast ? 4 : 0;
+      const rx = isFirst || isLast ? 6 : 0;
       const segment = `<rect x="${
         currentX + 40
       }" y="${barY}" width="${segmentWidth}" height="${barHeight}" fill="${
@@ -279,18 +305,20 @@ function generateSVG(
     })
     .join("");
 
-  // Generate language list in two columns with better spacing
+  // Generate language list with improved layout
   const languageList = languages
     .map((lang, index) => {
       const row = Math.floor(index / 2);
       const col = index % 2;
       const x = col === 0 ? 100 : 450;
-      const y = 485 + row * 38;
+      const y = 565 + row * 42;
 
       return `
-        <circle cx="${x - 40}" cy="${y - 3}" r="6" fill="${lang.color}"/>
+        <circle cx="${x - 45}" cy="${y - 4}" r="7" fill="${lang.color}"/>
         <text x="${x}" y="${y}" class="text lang-text">${lang.name}</text>
-        <text x="${x + 200}" y="${y}" class="text lang-percentage">${
+        <text x="${
+          x + 230
+        }" y="${y}" class="text lang-percentage" text-anchor="end">${
         lang.percentage
       }%</text>
       `;
@@ -302,10 +330,11 @@ function generateSVG(
   <style>
     @media (prefers-color-scheme: dark) {
       .bg { fill: #0d1117; }
-      .text { fill: #c9d1d9; }
+      .text { fill: #e6edf3; }
       .border { stroke: #30363d; }
       .grid-line { stroke: #21262d; }
-      .axis-label { fill: #8b949e; }
+      .axis-label { fill: #7d8590; }
+      .section-bg { fill: #161b22; }
     }
     @media (prefers-color-scheme: light) {
       .bg { fill: #ffffff; }
@@ -313,60 +342,84 @@ function generateSVG(
       .border { stroke: #d0d7de; }
       .grid-line { stroke: #e6e9ed; }
       .axis-label { fill: #57606a; }
+      .section-bg { fill: #f6f8fa; }
     }
-    .stat-number { font-size: 48px; font-weight: bold; }
-    .stat-label { font-size: 16px; }
-    .stat-detail { font-size: 12px; opacity: 0.8; }
-    .lang-text { font-size: 16px; font-weight: 500; }
-    .lang-percentage { font-size: 16px; opacity: 0.7; font-weight: 600; }
-    .section-title { font-size: 20px; font-weight: 600; letter-spacing: -0.5px; }
-    .accent { fill: #f85149; }
-    .blue { fill: #58a6ff; }
+    .stat-number { font-size: 52px; font-weight: bold; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    .stat-label { font-size: 15px; font-weight: 600; letter-spacing: 0.3px; }
+    .stat-detail { font-size: 12px; opacity: 0.75; }
+    .lang-text { font-size: 15px; font-weight: 500; }
+    .lang-percentage { font-size: 16px; font-weight: 600; opacity: 0.8; }
+    .section-title { font-size: 18px; font-weight: 700; letter-spacing: -0.3px; }
+    .accent-red { fill: #f85149; }
+    .accent-blue { fill: #58a6ff; }
+    .accent-green { fill: #3fb950; }
+    .accent-purple { fill: #a371f7; }
     .graph-line { stroke: #3fb950; stroke-width: 3; fill: none; stroke-linecap: round; stroke-linejoin: round; }
-    .graph-area { fill: #3fb95020; }
-    .grid-line { stroke-width: 1; opacity: 0.25; }
-    .axis-label { font-size: 12px; opacity: 0.7; }
+    .graph-area { fill: url(#gradient); opacity: 0.3; }
+    .grid-line { stroke-width: 1; opacity: 0.3; }
+    .axis-label { font-size: 11px; font-weight: 500; }
+    .text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
   </style>
   
+  <defs>
+    <linearGradient id="gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#3fb950;stop-opacity:0.8" />
+      <stop offset="100%" style="stop-color:#3fb950;stop-opacity:0.1" />
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="1" stdDeviation="3" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+  
   <!-- Background -->
-  <rect width="${width}" height="${height}" class="bg" rx="10"/>
+  <rect width="${width}" height="${height}" class="bg" rx="12"/>
   
   <!-- Stats Container -->
-  <rect x="10" y="10" width="780" height="140" fill="none" class="border" stroke-width="2" rx="8"/>
+  <rect x="10" y="10" width="780" height="160" class="section-bg" rx="10"/>
+  <rect x="10" y="10" width="780" height="160" fill="none" class="border" stroke-width="2" rx="10"/>
   
   <!-- Total Contributions -->
-  <text x="140" y="75" class="text stat-number" text-anchor="middle">${totalContributions.toLocaleString()}</text>
-  <text x="140" y="100" class="accent stat-label" text-anchor="middle">Total Contributions</text>
-  <text x="140" y="125" class="text stat-detail" text-anchor="middle">${accountCreated} - Present</text>
+  <g transform="translate(140, 60)">
+    <circle cx="0" cy="0" r="50" class="accent-red" opacity="0.12"/>
+    <text x="0" y="15" class="text stat-number accent-red" text-anchor="middle">${totalContributions.toLocaleString()}</text>
+    <text x="0" y="38" class="accent-red stat-label" text-anchor="middle">Total Contributions</text>
+    <text x="0" y="60" class="text stat-detail" text-anchor="middle">${accountCreated} - Present</text>
+  </g>
   
-  <!-- Current Streak with flame icon -->
-  <circle cx="400" cy="65" r="42" class="accent" opacity="0.15"/>
-  <path d="M 400 42 Q 400 37 405 37 L 405 32 Q 405 27 400 27 Q 395 27 395 32 L 395 37 Q 395 37 400 42 Z" class="accent" transform="translate(0, 5)"/>
-  <text x="400" y="75" class="text stat-number" text-anchor="middle">${
-    streaks.current
-  }</text>
-  <text x="400" y="100" class="blue stat-label" text-anchor="middle">Current Streak</text>
-  <text x="400" y="125" class="text stat-detail" text-anchor="middle">${currentStartDate} - Present</text>
+  <!-- Current Streak -->
+  <g transform="translate(400, 60)">
+    <circle cx="0" cy="0" r="50" class="accent-blue" opacity="0.12"/>
+    <path d="M -8 -15 Q -8 -20 -3 -20 L -3 -25 Q -3 -30 -8 -30 Q -13 -30 -13 -25 L -13 -20 Q -13 -20 -8 -15 M 8 -15 Q 8 -20 3 -20 L 3 -25 Q 3 -30 8 -30 Q 13 -30 13 -25 L 13 -20 Q 13 -20 8 -15 Z" class="accent-blue" opacity="0.7"/>
+    <text x="0" y="15" class="text stat-number accent-blue" text-anchor="middle">${
+      streaks.current
+    }</text>
+    <text x="0" y="38" class="accent-blue stat-label" text-anchor="middle">Current Streak</text>
+    <text x="0" y="60" class="text stat-detail" text-anchor="middle">${currentStartDate} - Present</text>
+  </g>
   
   <!-- Longest Streak -->
-  <text x="660" y="75" class="text stat-number" text-anchor="middle">${
-    streaks.longest
-  }</text>
-  <text x="660" y="100" class="accent stat-label" text-anchor="middle">Longest Streak</text>
-  <text x="660" y="125" class="text stat-detail" text-anchor="middle">${longestStartDate} - ${longestEndDate}</text>
+  <g transform="translate(660, 60)">
+    <circle cx="0" cy="0" r="50" class="accent-purple" opacity="0.12"/>
+    <text x="0" y="15" class="text stat-number accent-purple" text-anchor="middle">${
+      streaks.longest
+    }</text>
+    <text x="0" y="38" class="accent-purple stat-label" text-anchor="middle">Longest Streak</text>
+    <text x="0" y="60" class="text stat-detail" text-anchor="middle">${longestStartDate} - ${longestEndDate}</text>
+  </g>
   
   <!-- Dividers -->
-  <line x1="270" y1="30" x2="270" y2="130" class="border" stroke-width="2"/>
-  <line x1="530" y1="30" x2="530" y2="130" class="border" stroke-width="2"/>
+  <line x1="270" y1="30" x2="270" y2="150" class="border" stroke-width="2" opacity="0.3"/>
+  <line x1="530" y1="30" x2="530" y2="150" class="border" stroke-width="2" opacity="0.3"/>
   
   <!-- Activity Graph Container -->
-  <rect x="10" y="170" width="780" height="170" fill="none" class="border" stroke-width="2" rx="8"/>
+  <rect x="10" y="190" width="780" height="190" class="section-bg" rx="10"/>
+  <rect x="10" y="190" width="780" height="190" fill="none" class="border" stroke-width="2" rx="10"/>
   
   <!-- Activity Graph Title -->
-  <text x="30" y="195" class="text section-title">Contribution Activity (Last 90 Days)</text>
+  <text x="30" y="218" class="text section-title">Contribution Activity (Last 90 Days)</text>
   
   <!-- Activity Graph -->
-  <g transform="translate(30, 200)">
+  <g transform="translate(30, 230)">
     <!-- Grid lines -->
     ${gridLines.join("")}
     
@@ -377,31 +430,47 @@ function generateSVG(
     <!-- Axes -->
     <line x1="${padding}" y1="${graphHeight - padding}" x2="${
     graphWidth - padding
-  }" y2="${graphHeight - padding}" class="border" stroke-width="1.5"/>
+  }" y2="${graphHeight - padding}" class="border" stroke-width="2"/>
     <line x1="${padding}" y1="${padding}" x2="${padding}" y2="${
     graphHeight - padding
-  }" class="border" stroke-width="1.5"/>
+  }" class="border" stroke-width="2"/>
     
     <!-- Axis labels -->
-    <text x="${padding}" y="${
-    graphHeight - 5
-  }" class="axis-label" text-anchor="start">90 days ago</text>
-    <text x="${graphWidth - padding}" y="${
-    graphHeight - 5
+    <text x="${padding + 10}" y="${
+    graphHeight - 8
+  }" class="axis-label">90 days ago</text>
+    <text x="${graphWidth - padding - 10}" y="${
+    graphHeight - 8
   }" class="axis-label" text-anchor="end">Today</text>
-    <text x="${padding - 10}" y="${
-    padding + 5
-  }" class="axis-label" text-anchor="end">${maxContributions}</text>
-    <text x="${padding - 10}" y="${
-    graphHeight - padding
-  }" class="axis-label" text-anchor="end">0</text>
   </g>
   
+  <!-- Additional Stats Container -->
+  <rect x="10" y="400" width="780" height="80" class="section-bg" rx="10"/>
+  <rect x="10" y="400" width="780" height="80" fill="none" class="border" stroke-width="2" rx="10"/>
+  
+  <!-- Repository Stats -->
+  <g transform="translate(0, 440)">
+    <text x="200" y="0" class="text stat-number accent-blue" text-anchor="middle">${repoStats.totalStars.toLocaleString()}</text>
+    <text x="200" y="22" class="accent-blue stat-label" text-anchor="middle">Total Stars</text>
+    
+    <text x="400" y="0" class="text stat-number accent-purple" text-anchor="middle">${repoStats.totalForks.toLocaleString()}</text>
+    <text x="400" y="22" class="accent-purple stat-label" text-anchor="middle">Total Forks</text>
+    
+    <text x="600" y="0" class="text stat-number accent-green" text-anchor="middle">${
+      languages.length
+    }</text>
+    <text x="600" y="22" class="accent-green stat-label" text-anchor="middle">Languages Used</text>
+  </g>
+  
+  <line x1="310" y1="410" x2="310" y2="470" class="border" stroke-width="2" opacity="0.3"/>
+  <line x1="490" y1="410" x2="490" y2="470" class="border" stroke-width="2" opacity="0.3"/>
+  
   <!-- Languages Container -->
-  <rect x="10" y="360" width="780" height="300" fill="none" class="border" stroke-width="2" rx="8"/>
+  <rect x="10" y="500" width="780" height="250" class="section-bg" rx="10"/>
+  <rect x="10" y="500" width="780" height="250" fill="none" class="border" stroke-width="2" rx="10"/>
   
   <!-- Languages Title -->
-  <text x="30" y="390" class="accent section-title">Most Used Languages</text>
+  <text x="30" y="528" class="accent-green section-title">Most Used Languages</text>
   
   <!-- Language Bar -->
   <g>
@@ -430,13 +499,15 @@ module.exports = async (req, res) => {
     const streaks = calculateStreaks(calendar.weeks);
     const activityDays = getLast90Days(calendar.weeks);
     const languages = calculateLanguageStats(repositories);
+    const repoStats = calculateRepoStats(repositories);
 
     const svg = generateSVG(
       calendar.totalContributions,
       streaks,
       activityDays,
       languages,
-      createdAt
+      createdAt,
+      repoStats
     );
 
     res.setHeader("Content-Type", "image/svg+xml");
