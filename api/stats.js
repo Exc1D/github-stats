@@ -162,7 +162,6 @@ function calculateStreaks(weeks) {
     // Stop if we've gone past today (shouldn't happen, but safety check)
     if (dayDate > today) continue;
 
-    // sourcery skip: merge-else-if
     if (day.contributionCount > 0) {
       currentStreak++;
       currentStreakStart = day.date;
